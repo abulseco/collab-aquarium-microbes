@@ -13,3 +13,7 @@ phy_16_beforeRare <- readRDS("FINAL-PHYLO-OBJ/google_drive/phy-f-16_beforeRare.r
 phy_18_final <- readRDS("FINAL-PHYLO-OBJ/google_drive/phy-f-18_FINAL.rds")
 phy_18_beforeRare <- readRDS("FINAL-PHYLO-OBJ/google_drive/phy-f-18_beforeRare.rds")
 
+data.frame(
+  mean_reads = mean(sample_sums(phy_16_beforeRare)),
+  sd_reads   = sd(sample_sums(phy_16_beforeRare))
+)
