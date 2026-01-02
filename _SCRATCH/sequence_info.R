@@ -21,7 +21,7 @@ data.frame(
 # Read in objects----
 seqtab.nochim.16S <- readRDS("INTERMEDIATE-FILES/seqtab_nochimeras_16S.rds")
 seqtab.nochim.18S <- readRDS("INTERMEDIATE-FILES/seqtab_nochimeras_18s.rds")
-phy_16 <- readRDS("INTERMEDIATE-FILES/physeq_16s.rds") # before decontam
+phy_16 <- readRDS("physeq_16s.rds") # before decontam
 phy_18 <- readRDS("INTERMEDIATE-FILES/physeq_18s.rds") # before decontam
 phy_16_decontam <- readRDS("INTERMEDIATE-FILES/ps_16S_decontam.rds") # after decontam
 phy_18_decontam <- readRDS("INTERMEDIATE-FILES/ps_18s_decontam.rds") # after decontam
