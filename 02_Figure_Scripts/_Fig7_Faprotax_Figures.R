@@ -7,11 +7,41 @@
 # And to visualize stats
 
 # Load libraries
-library(mgcv)
-library(ggplot2)
+library(mgcv); library(ggplot2); library(patchwork)
+
+## Figure formatting----
+pretty.theme <- function(){
+  theme_bw()+
+    theme(axis.text.x=element_text(size=14, color = "black", angle = 45, hjust = 1),
+          axis.text.y=element_text(size=14, color = "black"),
+          axis.title.x=element_text(size=14, color = "black"),             
+          axis.title.y=element_text(size=14, color = "black"),             
+          panel.grid.major.x=element_blank(),                                          
+          panel.grid.minor.x=element_blank(),
+          panel.grid.minor.y=element_blank(),
+          panel.grid.major.y=element_blank(),  
+          plot.margin = unit(c(0.5, 0.5, 0.5, 0.5), units = , "cm"),
+          plot.title = element_text(size=20),
+          legend.text = element_text(size=12, face="italic"),          
+          legend.title = element_blank(),                              
+          legend.position="none")
+}
+
+pretty.theme.noaxes <- function(){
+  theme_bw() +
+    theme(axis.title.x = element_blank(), axis.title.y = element_blank(),             
+          panel.grid.major.x=element_blank(),                                          
+          panel.grid.minor.x=element_blank(),
+          panel.grid.minor.y=element_blank(),
+          panel.grid.major.y=element_blank(),  
+          plot.margin = unit(c(0.5, 0.5, 0.5, 0.5), units = , "cm"),
+          legend.title = element_blank(),                              
+          legend.position="none")
+}
 
 # Output from MicroEco
 faprotax_boxplot <- read.csv("FAPROTAX/function-boxplot-timeseries.csv", header = T)
+# Need to move everything over from local directory
 
 # Boxplots----
 ## Time series----
@@ -25,7 +55,7 @@ chemohet_boxplot <- ggplot(faprotax_boxplot, aes(x = Treatment, y = chemoheterot
   geom_boxplot(aes(fill = Sal_status), width = 0.6, alpha = 0.8) +
   scale_fill_manual(values=c("#1B9E77", "#D95F02","#7570B3"))+
   labs(x = "Treatment", y = "Chemoheterotrophy (%)") +
-  pretty.theme.noangle() +
+  pretty.theme() +
   theme(legend.position = "none")
 chemohet_boxplot
 
@@ -307,6 +337,20 @@ gamm_fapro_nit <- gamm(nitrification ~ Sal_status + s(Day, by = Sal_status, k = 
                             method = "REML",
                             na.action = na.exclude)
 summary(gamm_fapro_nit$gam)
+
+## smooth terms----
+plot(gamm_fapro_fer$gam, pages = 1, shade = TRUE, main = "Fitted fermentation over time")
+plot(gamm_fapro_chemohet$gam, pages = 1, shade = TRUE, main = "Fitted chemoheterotrophy over time")
+
+pred31 <- disp_df %>%
+  filter(Sal_status == "31") %>%
+  mutate(fitted = predict(gamm_mod_disp$gam, newdata = ., type = "response"))
+
+plot(pred31$Day, pred31$fitted, type = "l",
+     ylab = "Fitted dispersion (Distance)",
+     xlab = "Day", main = "Fitted Dispersion 31ppt/prazi over time")
+
+
 
 library(gratia)
 
