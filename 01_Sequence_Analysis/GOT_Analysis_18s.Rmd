@@ -1,0 +1,585 @@
+---
+title: "GOT_18s_Analysis"
+output: html_document
+date: "2024-05-07"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r,warning=FALSE,message=FALSE}
+# Imports
+
+library(dada2)
+library(ape)
+library(vegan)
+library(phyloseq)
+library(ggplot2)
+library(vegan)
+library(plyr)
+library(dplyr)
+library(ape)
+library(plotly)
+```
+
+```{r}
+path <- "/home/nickel.h/GOT_Analysis/18s/18s_Read_Files"
+list.files(path)  
+```
+
+```{r}
+# Assign which files are forward/reverse in that path
+fnFs <- sort(list.files(path, pattern = "R1_001.fastq.gz", full.names = TRUE))
+fnRs <- sort(list.files(path, pattern = "R2_001.fastq.gz", full.names = TRUE))
+
+# Name the samples 
+sample.names <- sapply(strsplit(basename(fnFs), "_"), function(x) x[[1]])
+
+```
+
+```{r}
+
+# Check quality
+plotQualityProfile(fnFs[5:10])  # Early copper samples
+plotQualityProfile(fnRs[25:30]) 
+
+```
+```{r}
+
+# Copy filtered samples to subdirectory
+filt_path <- file.path(path, "filtered_GOT_18s")
+filtFs <- file.path(filt_path, paste0(sample.names, "_F_filt.fastq.gz"))
+filtRs <- file.path(filt_path, paste0(sample.names, "_R_filt.fastq.gz"))
+
+# Filter / Trim
+out <- filterAndTrim(fnFs, filtFs, fnRs, filtRs, truncLen=c(150,150), maxN=0, maxEE=c(2,2), truncQ=2, trimLeft = 20, rm.phix=TRUE,compress=TRUE, multithread = TRUE, matchIDs=TRUE) 
+
+
+saveRDS(out,"out_18s.rds")
+out <- readRDS("out_18s.rds")
+head(out)
+
+```
+
+```{r}
+
+# Get existing files that weren't filtered out
+exists <- file.exists(filtFs)
+
+# Learn error rate
+errF <- learnErrors(filtFs[exists], multithread=TRUE) #41921490 total bases in 278318 reads from 61 samples will be used for learning the error rates.
+saveRDS(errF, "errF_GOT_18s.rds")
+errR <- learnErrors(filtRs[exists], multithread=TRUE) #41921490 total bases in 278318 reads from 61 samples will be used for learning the error rates.
+saveRDS(errR, "errR_GOT_18s.rds")
+
+# Reload and plot learned errors
+errF <- readRDS("errF_GOT_18s.rds")
+errR <- readRDS("errR_GOT_18s.rds")
+plotErrors(errR, nominalQ=TRUE)
+plotErrors(errF, nominalQ=TRUE)
+
+# Derep and save with sample names
+derepFs <- derepFastq(filtFs[exists], verbose=TRUE)
+derepRs <- derepFastq(filtRs[exists], verbose=TRUE)
+names(derepFs) <- sample.names[exists]
+names(derepRs) <- sample.names[exists]
+
+```
+
+```{r}
+# Dada step!
+dadaFs <- dada(derepFs, err=errF, multithread=TRUE)
+saveRDS(dadaFs, "dadaFs_18s.rds")
+dadaRs <- dada(derepRs, err=errR, multithread=TRUE)
+saveRDS(dadaRs, "dadaRs_18s.rds")
+
+# Merge paired reads
+mergers <- mergePairs(dadaFs, derepFs, dadaRs, derepRs, verbose=TRUE)
+saveRDS(mergers, "merger_GOT_18s.rds")
+mergers <- readRDS("merger_GOT_18s.rds")
+
+# Construct sequence table
+seqtab <- makeSequenceTable(mergers)
+dim(seqtab)  # 76 1525
+
+```
+
+```{r}
+
+# Remove chimeras
+seqtab.nochim <- removeBimeraDenovo(seqtab, method="consensus", multithread=TRUE, verbose=TRUE)
+dim(seqtab.nochim) 
+table(nchar(getSequences(seqtab.nochim)))
+sum(seqtab.nochim)/sum(seqtab)  #.999 ??
+saveRDS(seqtab.nochim,"seqtab_nochimeras_18s.rds")
+seqtab.nochim = readRDS("seqtab_nochimeras_18s.rds")
+# Create OTU table
+otu_table <- data.frame(sequence =  colnames(seqtab.nochim), abundance = colSums(seqtab.nochim))
+
+```
+
+
+```{r}
+getN <- function(x) sum(getUniques(x))
+track <- cbind(out, sapply(dadaFs, getN), sapply(dadaRs, getN), sapply(mergers, getN), rowSums(seqtab.nochim))
+colnames(track) <- c("input", "filtered", "denoisedF", "denoisedR", "merged", "nonchim")
+rownames(track) <- sample.names
+write.csv(track, "track_GOT_18s.csv")
+head(track)
+```
+
+
+```{r}
+
+#  Assign taxonomy! (using SILVA)
+taxa <- assignTaxonomy(seqtab.nochim, "/home/nickel.h/GOT_Analysis/18s/Databases/pr2_version_5.0.0_SSU_dada2.fasta.gz", multithread=TRUE)
+saveRDS(taxa, "taxa_18s.rds")
+
+# Add species level
+#taxa.plus <- addSpecies(taxa, "~/Desktop/GOT/Database/silva_species_assignment_v132.fa.gz", verbose=TRUE)
+#saveRDS(taxa.plus, "~/Desktop/GOT/taxa_plus.rds")
+
+```
+
+```{r}
+
+meta = read.csv("/home/nickel.h/GOT_Analysis/18s/GOT_18s_map.csv", row.names = "X.SampleID")
+#dates <- as.Date(sample_names, format = "%Y_%m_%d")  # Adjust the format if needed
+tax = readRDS("/home/nickel.h/GOT_Analysis/18s/taxa_18s.rds")
+seqtab.nochim = readRDS("/home/nickel.h/GOT_Analysis/18s/seqtab_nochimeras_18s.rds")
+
+
+physeq <- phyloseq(otu_table(seqtab.nochim, taxa_are_rows=FALSE), 
+                   sample_data(meta), tax_table(tax))
+
+physeq
+```
+
+
+
+```{r}
+
+# Remove samples with low reads (can't make this work)
+pruned = prune_samples(sample_sums(physeq)>=20, physeq)
+
+# Filter out really low abundance taxa
+physeq2 = filter_taxa(pruned, function(x) sum(x > 1) > (0.01*length(x)), TRUE)
+physeq2
+```
+
+```{r}
+
+# Remove blanks and examine number of reads
+#physeq_GOT = physeq2 #subset_samples(physeq2, Project != "Blank")
+#sample_sum_df <- data.frame(sum = sample_sums(physeq_GOT))
+#sample_sum_df
+
+```
+
+# Decontaminate
+```{r}
+library("decontam")
+library(Biostrings); packageVersion("Biostrings")
+dna <- Biostrings::DNAStringSet(taxa_names(physeq2))
+names(dna) <- taxa_names(physeq2)
+physeq2 <- merge_phyloseq(physeq2)
+taxa_names(physeq2) <- paste0("ASV", seq(ntaxa(physeq2)))
+physeq2
+```
+
+
+```{r}
+
+sample_data(physeq2)$is.neg <- sample_data(physeq2)$Project == "Blank"
+contamdf.prev <- isContaminant(physeq2, method="prevalence", neg="is.neg")
+table(contamdf.prev$contaminant)
+head(which(contamdf.prev$contaminant))
+
+ps <- prune_taxa(!contamdf.prev$contaminant, physeq2)
+saveRDS(ps, "ps_18s_decontam.rds")
+
+# yay!
+
+```
+# new stuff here
+```{r}
+ps <- readRDS("ps_18s_decontam.rds")
+
+physeq_GOT = subset_samples(ps, Project != "Blank")
+
+physeq_GOT %>%
+  subset_taxa(Family != "Embryophyceae" & 
+                Family != "Mollusca") -> physeq_GOT
+
+```
+
+```{r}
+# Load necessary libraries
+library(phyloseq)
+library(ggplot2)
+library(stringr)
+
+
+# Calculate Shannon diversity for each sample
+shannon_diversity <- estimate_richness(physeq_GOT, measures = "Shannon")
+
+# Extract sample names and Shannon values
+shannon_diversity_df <- data.frame(Sample = rownames(shannon_diversity), Shannon = shannon_diversity$Shannon)
+
+# Add a column from the sample metadata (e.g., Time or Treatment) for the x-axis
+sample_metadata_df <- data.frame(Sample = rownames(sample_data(physeq_GOT)), Project = sample_data(physeq_GOT)$Project)  # Replace 'Time' with your column name
+
+# Merge Shannon diversity data with the metadata
+shannon_diversity_df <- merge(shannon_diversity_df, sample_metadata_df, by = "Sample")
+#shannon_diversity_df$Day <- as.numeric(shannon_diversity_df$Day)
+
+shannon_diversity_df <- shannon_diversity_df %>%
+  mutate(Project = str_replace_all(Project, "TimeSeries", "Hyposalinity")) %>%
+  mutate(Project = str_replace_all(Project, "Copper_tx", "Copper"))
+alpha <- ggplot(shannon_diversity_df, aes(x = factor(Project), y = Shannon, fill = factor(Project))) +
+  geom_boxplot() +
+  labs(x = "Treatment", y = "Alpha Diversity") +
+  scale_fill_manual(values = c("brown", "navyblue")) +  # Set two colors manually
+  theme_minimal() +
+  theme(
+    legend.position = "none",  # Remove the legend
+    panel.border = element_rect(color = "black", fill = NA, size = 1),  # Add a black border
+    panel.background = element_rect(fill = "white")  # Ensure panel background is visible
+  ) +
+  ylim(0, 5)  # Set y-axis range from 0 to 5
+
+
+
+ggsave("alpha_18s.png", plot = alpha, width = 4.5, height = 4, dpi = 300)
+```
+
+```{r}
+# Split data by Project
+group_A <- shannon_diversity_df$Shannon[shannon_diversity_df$Project == "Copper"]
+group_B <- shannon_diversity_df$Shannon[shannon_diversity_df$Project == "Hyposalinity"]
+
+# Shapiro-Wilk test for normality
+shapiro.test(group_A)
+shapiro.test(group_B)
+
+library(car)
+leveneTest(Shannon ~ Project, data = shannon_diversity_df)
+
+```
+
+
+```{r}
+# Perform Mann-Whitney U Test (Wilcoxon rank-sum test)
+mw_result <- wilcox.test(Shannon ~ Project, data = shannon_diversity_df)
+
+# Display results
+print(mw_result)
+
+
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+```{r, fig.width=10,fig.height=6}
+
+# Just time series here
+# Static version 3-- using transformed abundance, no NAs
+# Top IDENTIFIED Phylum
+# Aggregate in chron order
+  # NOTE: this drops NAs
+tax_table(ps) <- tax_table(ps)[, !is.na(colnames(tax_table(ps)))]
+
+physeq_GOT = subset_samples(ps, Project != "Blank")
+
+physeq_GOT %>%
+  subset_taxa(Family != "Embryophyceae" & 
+                Family != "Mollusca") -> physeq_GOT
+dat.aglo = tax_glom(physeq_GOT, taxrank = "Family")
+
+
+dat.trans = transform_sample_counts(dat.aglo, function(x) x/sum(x))
+dat.dataframe = psmelt(dat.trans)
+dat.agr <- aggregate(Abundance ~ Description2 + Project + Family, data = dat.dataframe, FUN = mean, na.action = na.pass)
+dat.agr$new_datetime_column <- as.POSIXct(dat.agr$Description2, format = "%m_%d_%y")
+dat.agr <- dat.agr[order(dat.agr$new_datetime_column), ]
+dat.agr$Description2 <- factor(dat.agr$Description2, levels = unique(dat.agr$Description2))
+
+dat.top30 <- dat.agr %>% 
+  group_by(Family) %>% 
+  summarise(mean_abundance = mean(Abundance)) %>% 
+  top_n(30, mean_abundance) %>% 
+  inner_join(dat.agr, by = "Family")
+
+p <- ggplot(dat.top30, aes(x = Description2, y = Abundance, fill = Family)) +
+  facet_grid(~Project, scale = "free", space = "free") +
+    geom_bar(stat = "identity", color = "black", width = 0.8) +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1)) +
+  scale_y_continuous(labels = scales::percent) +
+  labs( x = "")
+
+ggsave("18s_community.png", plot = p, width = 14, height = 6, units = "in", dpi = 300)
+p
+
+```
+
+
+```{r, fig.width=6,fig.height=4}
+
+# Beta diversity 
+
+# Prep data
+relab_genera <-transform_sample_counts(physeq_GOT, function(x) x/sum(x))
+sample_data(relab_genera)$Salinity <- as.numeric(sample_data(relab_genera)$Salinity)
+non_empty_rows <- rowSums(otu_table(relab_genera)) != 0 # Keep only non-empty rows
+relab_genera <- prune_samples(non_empty_rows, relab_genera)
+abrel_bray <- phyloseq::distance(relab_genera, method = "bray", na.rm = FALSE) # Calculate bray curtis distance
+ps_bray <- merge_phyloseq(relab_genera, as.matrix(abrel_bray))
+abrel_ordbray <- ordinate(ps_bray, "PCoA", "bray")
+
+# Create plot
+beta_diversity_plot <- plot_ordination(relab_genera, abrel_ordbray, shape = 'Prazi_status') +
+  theme_classic() +
+  geom_point(aes(color = Salinity, text = paste("Sample ID:", Description, "<br>",
+                                               "Day:", Day, "<br>",
+                                               "Project:", Project, "<br>",
+                                               "Salinity:", Salinity, "<br>",
+                                               "Copper:", Copper)), size = 5) + 
+  scale_color_gradient(name = "Salinity", low = "lightblue", high = "navyblue")
+
+# Convert ggplot to plotly
+beta_diversity_plotly <- ggplotly(beta_diversity_plot)
+
+
+beta_diversity_plotly
+ggsave("beta_plot_sal_18s.png", plot = beta_diversity_plot, width = 6, height = 6, dpi = 300)
+
+```
+
+
+```{r, fig.width=6,fig.height=4}
+
+# Beta diversity 
+# Prep data
+sample_data(relab_genera)$Copper <- as.numeric(sample_data(relab_genera)$Copper)
+non_empty_rows <- rowSums(otu_table(relab_genera)) != 0 # Keep only non-empty rows
+relab_genera <- prune_samples(non_empty_rows, relab_genera)
+abrel_bray <- phyloseq::distance(relab_genera, method = "bray", na.rm = FALSE) # Calculate bray curtis distance
+ps_bray <- merge_phyloseq(relab_genera, as.matrix(abrel_bray))
+abrel_ordbray <- ordinate(ps_bray, "PCoA", "bray")
+
+# Create plot
+beta_diversity_plot <- plot_ordination(relab_genera, abrel_ordbray, shape = 'Prazi_status') +
+  theme_classic() +
+  geom_point(aes(color = Copper, text = paste("Sample ID:", Description, "<br>",
+                                               "Day:", Day, "<br>",
+                                               "Project:", Project, "<br>",
+                                               "Copper Status:", Copper_status)), size = 5) + 
+  scale_color_gradient(name = "Copper", low = "pink", high = "brown")
+
+# Convert ggplot to plotly
+beta_diversity_plotly <- ggplotly(beta_diversity_plot)
+
+
+beta_diversity_plotly
+ggsave("beta_plot_copper_18s.png", plot = beta_diversity_plot, width = 6, height = 6, dpi = 300)
+
+```
+
+# Random forest
+```{r}
+library(randomForest)
+library(knitr)
+
+#DCS:
+predictors <- (otu_table(physeq_GOT))
+dim(predictors)
+
+# Make one column for our outcome/response variable 
+response <- as.factor(sample_data(physeq_GOT)$DCS)
+# Combine them into 1 data frame
+rf.data <- data.frame(response, predictors)
+set.seed(2)
+dcs.classify <- randomForest(response~., data = rf.data, ntree = 100)
+print(dcs.classify)
+
+# Make a data frame with predictor names and their importance
+imp <- importance(dcs.classify)
+imp <- data.frame(predictors = rownames(imp), imp)
+
+# Order the predictor levels by importance
+imp.sort <- arrange(imp, desc(MeanDecreaseGini))
+imp.sort$predictors <- factor(imp.sort$predictors, levels = imp.sort$predictors)
+
+# Select the top 10 predictors
+imp.top20 <- imp.sort[1:20, ]
+imp.top20$predictors <- factor(imp.top20$predictors, levels = rev(imp.top20$predictors))
+
+
+
+# ggplot
+rf_gini <- ggplot(imp.top20, aes(x = predictors, y = MeanDecreaseGini)) +
+  geom_bar(stat = "identity", fill = "darkolivegreen3") +
+  coord_flip()
+ggsave("rf_18s_dcs.png", plot = rf_gini, width = 6, height = 6, dpi = 300)
+
+# Extract OTU names in the order they appear in the bar chart
+otunames <- imp.top20$predictors
+
+# Find the matching OTUs in the tax table and reorder them to match the bar chart
+r <- rownames(tax_table(physeq_GOT)) %in% otunames
+otu_table_ordered <- tax_table(physeq_GOT)[r, ]
+otu_table_ordered <- otu_table_ordered[match(otunames, rownames(otu_table_ordered)), ]
+
+# Display the table in the desired order
+kable(otu_table_ordered)
+```
+
+```{r}
+
+#Salinity:
+predictors <- (otu_table(physeq_GOT))
+dim(predictors)
+
+# Make one column for our outcome/response variable 
+response <- as.factor(sample_data(physeq_GOT)$Sal_status)
+# Combine them into 1 data frame
+rf.data <- data.frame(response, predictors)
+set.seed(2)
+sal.classify <- randomForest(response~., data = rf.data, ntree = 100)
+print(sal.classify)
+
+
+# Make a data frame with predictor names and their importance
+imp <- importance(sal.classify)
+imp <- data.frame(predictors = rownames(imp), imp)
+
+# Order the predictor levels by importance
+imp.sort <- arrange(imp, desc(MeanDecreaseGini))
+imp.sort$predictors <- factor(imp.sort$predictors, levels = imp.sort$predictors)
+
+# Select the top 10 predictors
+imp.top20 <- imp.sort[1:20, ]
+imp.top20$predictors <- factor(imp.top20$predictors, levels = rev(imp.top20$predictors))
+
+
+# ggplot
+rf_gini <- ggplot(imp.top20, aes(x = predictors, y = MeanDecreaseGini)) +
+  geom_bar(stat = "identity", fill = "steelblue") +
+  coord_flip()
+ggsave("rf_18s_sal.png", plot = rf_gini, width = 6, height = 6, dpi = 300)
+
+# Extract OTU names in the order they appear in the bar chart
+otunames <- imp.top20$predictors
+
+# Find the matching OTUs in the tax table and reorder them to match the bar chart
+r <- rownames(tax_table(physeq_GOT)) %in% otunames
+otu_table_ordered <- tax_table(physeq_GOT)[r, ]
+otu_table_ordered <- otu_table_ordered[match(otunames, rownames(otu_table_ordered)), ]
+
+# Display the table in the desired order
+kable(otu_table_ordered)
+
+```
+
+```{r}
+
+library(reshape2)
+library(ggplot2)
+
+
+confusion_matrix <- sal.classify$confusion
+confusion_df <- as.data.frame(confusion_matrix)
+confusion_df <- confusion_df[, -ncol(confusion_df)]
+confusion_df$Reference <- rownames(confusion_matrix)
+confusion_df_melt <- melt(confusion_df, id.vars = "Reference")
+
+
+confusion_matrix_plot <- ggplot(data = confusion_df_melt, aes(x = Reference, y = variable, fill = value)) +
+  geom_tile(color = "white") +
+  geom_text(aes(label = value), color = "black", size = 5) +
+  scale_fill_gradient(low = "lightblue", high = "darkblue") +
+  labs(title = "Confusion Matrix", x = "Actual", y = "Predicted") +
+  theme_minimal()
+
+ggsave("confusion_18s_sal.png", plot = confusion_matrix_plot, width = 4.5, height = 4, dpi = 300)
+
+
+```
+
+```{r}
+
+library(reshape2)
+library(ggplot2)
+
+
+confusion_matrix <- dcs.classify$confusion
+confusion_df <- as.data.frame(confusion_matrix)
+confusion_df <- confusion_df[, -ncol(confusion_df)]
+confusion_df$Reference <- rownames(confusion_matrix)
+confusion_df_melt <- melt(confusion_df, id.vars = "Reference")
+
+
+confusion_matrix_plot <- ggplot(data = confusion_df_melt, aes(x = Reference, y = variable, fill = value)) +
+  geom_tile(color = "white") +
+  geom_text(aes(label = value), color = "black", size = 5) +
+  scale_fill_gradient(low = "orange1", high = "darkorange4") +
+  labs(title = "Confusion Matrix", x = "Actual", y = "Predicted") +
+  theme_minimal()
+
+ggsave("confusion_18s_dcs.png", plot = confusion_matrix_plot, width = 4.5, height = 4, dpi = 300)
+confusion_matrix_plot
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
